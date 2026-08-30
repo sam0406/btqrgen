@@ -12,84 +12,70 @@ const loginScreen =
         "loginScreen"
     );
 
-
 const generatorScreen =
     document.getElementById(
         "generatorScreen"
     );
-
 
 const loginForm =
     document.getElementById(
         "loginForm"
     );
 
-
 const loginButton =
     document.getElementById(
         "loginButton"
     );
-
 
 const loginError =
     document.getElementById(
         "loginError"
     );
 
-
 const logoutButton =
     document.getElementById(
         "logoutButton"
     );
-
 
 const wordGrid =
     document.getElementById(
         "wordGrid"
     );
 
-
 const qrImage =
     document.getElementById(
         "qrImage"
     );
-
 
 const generateButton =
     document.getElementById(
         "generateButton"
     );
 
-
 const generationError =
     document.getElementById(
         "generationError"
     );
-
 
 const codeNumber =
     document.getElementById(
         "codeNumber"
     );
 
-
 const randomModeButton =
     document.getElementById(
         "randomModeButton"
     );
-
 
 const kangarooModeButton =
     document.getElementById(
         "kangarooModeButton"
     );
 
-
 const modeDescription =
     document.getElementById(
         "modeDescription"
     );
-
 
 const kangarooStatus =
     document.getElementById(
@@ -105,7 +91,6 @@ const kangarooStatus =
 
 let currentMode =
     "random";
-
 
 let displayedCodeCount =
     0;
@@ -156,27 +141,21 @@ async function login(
     password
 ) {
 
-
     loginButton.disabled =
         true;
-
 
     loginButton.textContent =
         "Logging in…";
 
-
     loginError.hidden =
         true;
 
-
     try {
-
 
         const response =
             await fetch(
                 "/api/login",
                 {
-
                     method:
                         "POST",
 
@@ -194,7 +173,6 @@ async function login(
                             username,
                             password
                         })
-
                 }
             );
 
@@ -218,9 +196,7 @@ async function login(
 
         loginForm.reset();
 
-
         showGenerator();
-
 
         await generateCode();
 
@@ -229,22 +205,17 @@ async function login(
         error
     ) {
 
-
         loginError.textContent =
             error.message ||
             "Login failed.";
 
-
         loginError.hidden =
             false;
 
-
     } finally {
-
 
         loginButton.disabled =
             false;
-
 
         loginButton.textContent =
             "Login";
@@ -301,27 +272,22 @@ loginForm.addEventListener(
 
 async function logout() {
 
-
     logoutButton.disabled =
         true;
 
 
     try {
 
-
         await fetch(
             "/api/logout",
             {
-
                 method:
                     "POST",
 
                 credentials:
                     "same-origin"
-
             }
         );
-
 
     } catch (
         error
@@ -384,39 +350,33 @@ function setMode(
 
 
     if (
-        mode === "kangaroo"
+        mode ===
+        "kangaroo"
     ) {
-
 
         kangarooModeButton.classList.add(
             "active"
         );
 
-
         randomModeButton.classList.remove(
             "active"
         );
 
-
         modeDescription.textContent =
-            "🦘 Searches secure candidates for one that is far from recent codes.";
-
+            "🦘 Searches valid BIP-39 candidates for one that is far from recent codes.";
 
     } else {
-
 
         randomModeButton.classList.add(
             "active"
         );
 
-
         kangarooModeButton.classList.remove(
             "active"
         );
 
-
         modeDescription.textContent =
-            "Cryptographically random 12-word code.";
+            "Cryptographically secure BIP-39 12-word mnemonic.";
 
     }
 
@@ -463,7 +423,6 @@ function displayWords(
     words
 ) {
 
-
     wordGrid.innerHTML =
         "";
 
@@ -473,7 +432,6 @@ function displayWords(
             word,
             index
         ) => {
-
 
             const element =
                 document.createElement(
@@ -523,28 +481,232 @@ function displayQRCode(
 
 /*
 |--------------------------------------------------------------------------
+| Strict mnemonic normalization
+|--------------------------------------------------------------------------
+*/
+
+function normalizeMnemonic(
+    mnemonic
+) {
+
+    return String(
+        mnemonic || ""
+    )
+        .normalize("NFKD")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Validate returned mnemonic
+|--------------------------------------------------------------------------
+*/
+
+function validateReturnedMnemonic(
+    data
+) {
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | code must exist
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+        typeof data.code !==
+        "string"
+    ) {
+
+        throw new Error(
+            "Server did not return the mnemonic code."
+        );
+
+    }
+
+
+    const code =
+        normalizeMnemonic(
+            data.code
+        );
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Exactly 12 words
+    |--------------------------------------------------------------------------
+    */
+
+    const codeWords =
+        code.split(" ");
+
+
+    if (
+        codeWords.length !==
+        12
+    ) {
+
+        throw new Error(
+            "Server returned a mnemonic that does not contain exactly 12 words."
+        );
+
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Every word lowercase
+    |--------------------------------------------------------------------------
+    */
+
+    for (
+        const word
+        of codeWords
+    ) {
+
+        if (
+            word !==
+            word.toLowerCase()
+        ) {
+
+            throw new Error(
+                "Server returned a non-lowercase mnemonic."
+            );
+
+        }
+
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | data.words must exist
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+        !Array.isArray(
+            data.words
+        )
+    ) {
+
+        throw new Error(
+            "Invalid word data received from server."
+        );
+
+    }
+
+
+    if (
+        data.words.length !==
+        12
+    ) {
+
+        throw new Error(
+            "The server did not return exactly 12 words."
+        );
+
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Normalize returned words
+    |--------------------------------------------------------------------------
+    */
+
+    const returnedWords =
+        data.words.map(
+            word =>
+                normalizeMnemonic(
+                    word
+                )
+        );
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | No duplicate words
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+        new Set(
+            returnedWords
+        ).size !==
+        12
+    ) {
+
+        throw new Error(
+            "The server returned duplicate words."
+        );
+
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | CRITICAL:
+    |
+    | The displayed words MUST equal
+    | the exact mnemonic used for QR.
+    |--------------------------------------------------------------------------
+    */
+
+    const reconstructedCode =
+        returnedWords.join(" ");
+
+
+    if (
+        reconstructedCode !==
+        code
+    ) {
+
+        throw new Error(
+            "Security check failed: displayed words do not match the mnemonic."
+        );
+
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Return the single canonical value.
+    |--------------------------------------------------------------------------
+    */
+
+    return {
+        code,
+        words:
+            codeWords
+    };
+
+}
+
+
+/*
+|--------------------------------------------------------------------------
 | Generate code
 |--------------------------------------------------------------------------
 */
 
 async function generateCode() {
 
-
     generateButton.disabled =
         true;
-
 
     generateButton.textContent =
         "Generating…";
 
-
     generationError.hidden =
         true;
 
-
     generationError.textContent =
         "";
-
 
     kangarooStatus.hidden =
         true;
@@ -572,10 +734,8 @@ async function generateCode() {
 
                     body:
                         JSON.stringify({
-
                             mode:
                                 currentMode
-
                         })
 
                 }
@@ -612,9 +772,7 @@ async function generateCode() {
             401
         ) {
 
-
             showLogin();
-
 
             throw new Error(
                 "Your session has expired. Please log in again."
@@ -663,48 +821,17 @@ async function generateCode() {
 
         /*
         |--------------------------------------------------------------------------
-        | Validate words
+        | Server must explicitly say BIP-39 valid
         |--------------------------------------------------------------------------
         */
 
         if (
-            !Array.isArray(
-                data.words
-            )
+            data.bip39Valid !==
+            true
         ) {
 
             throw new Error(
-                "Invalid word data received from server."
-            );
-
-        }
-
-
-        if (
-            data.words.length !==
-            12
-        ) {
-
-            throw new Error(
-                "The server did not return exactly 12 words."
-            );
-
-        }
-
-
-        const uniqueWords =
-            new Set(
-                data.words
-            );
-
-
-        if (
-            uniqueWords.size !==
-            12
-        ) {
-
-            throw new Error(
-                "The server returned duplicate words."
+                "Server did not confirm BIP-39 validation."
             );
 
         }
@@ -712,7 +839,37 @@ async function generateCode() {
 
         /*
         |--------------------------------------------------------------------------
-        | Validate QR
+        | Server must explicitly return 12
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            data.wordCount !==
+            12
+        ) {
+
+            throw new Error(
+                "Server did not confirm a 12-word mnemonic."
+            );
+
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Validate code + words consistency
+        |--------------------------------------------------------------------------
+        */
+
+        const validated =
+            validateReturnedMnemonic(
+                data
+            );
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Validate QR data URL
         |--------------------------------------------------------------------------
         */
 
@@ -733,14 +890,21 @@ async function generateCode() {
 
         /*
         |--------------------------------------------------------------------------
-        | Display
+        | Display ONLY the validated mnemonic
         |--------------------------------------------------------------------------
         */
 
         displayWords(
-            data.words
+            validated.words
         );
 
+
+        /*
+        |--------------------------------------------------------------------------
+        | Display QR generated from
+        | that exact same mnemonic
+        |--------------------------------------------------------------------------
+        */
 
         displayQRCode(
             data.qr
@@ -766,7 +930,7 @@ async function generateCode() {
         ) {
 
             kangarooStatus.textContent =
-                "🦘 Kangaroo mode: this code was selected to be distant from recent generated codes.";
+                "🦘 Kangaroo mode: valid BIP-39 candidates were compared and the selected code was stored.";
 
             kangarooStatus.hidden =
                 false;
@@ -777,7 +941,6 @@ async function generateCode() {
     } catch (
         error
     ) {
-
 
         console.error(
             "Generation error:",
@@ -795,10 +958,8 @@ async function generateCode() {
 
     } finally {
 
-
         generateButton.disabled =
             false;
-
 
         generateButton.textContent =
             "Generate New Code";
