@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <meta
+        name="description"
+        content="Generate globally unique 12-word codes."
+    >
+
+    <title>12 Word Code</title>
+
+    <link
+        rel="stylesheet"
+        href="/style.css"
+    >
+
+</head>
+
+
+<body>
+
+
+<main class="page">
+
+
+    <!-- LOGIN -->
+
+    <section
+        id="loginScreen"
+        class="login-screen"
+    >
+
+        <div class="login-card">
+
+            <div class="brand-mark">
+                12
+            </div>
+
+            <h1>
+                12 Word Code
+            </h1>
+
+            <p class="login-subtitle">
+                Authorized access only
+            </p>
+
+
+            <form
+                id="loginForm"
+            >
+
+
+                <label
+                    for="username"
+                >
+                    Username
+                </label>
+
+
+                <input
+                    id="username"
+                    name="username"
+                    type="text"
+                    autocomplete="username"
+                    required
+                    maxlength="100"
+                >
+
+
+                <label
+                    for="password"
+                >
+                    Password
+                </label>
+
+
+                <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    required
+                    maxlength="200"
+                >
+
+
+                <button
+                    id="loginButton"
+                    class="button"
+                    type="submit"
+                >
+                    Login
+                </button>
+
+
+                <div
+                    id="loginError"
+                    class="error"
+                    role="alert"
+                    hidden
+                ></div>
+
+
+            </form>
+
+        </div>
+
+    </section>
+
+
+    <!-- GENERATOR -->
+
+    <section
+        id="generatorScreen"
+        class="generator-screen"
+        hidden
+    >
+
+
+        <header class="header">
+
+
+            <div>
+
+                <div class="title-row">
+
+                    <h1>
+                        12 Word Code
+                    </h1>
+
+                </div>
+
+                <p>
+                    Globally unique cryptographically secure codes
+                </p>
+
+            </div>
+
+
+            <button
+                id="logoutButton"
+                class="logout-button"
+                type="button"
+            >
+                Logout
+            </button>
+
+
+        </header>
+
+
+        <!-- MODE SELECTOR -->
+
+        <div class="mode-selector">
+
+
+            <button
+                id="randomModeButton"
+                class="mode-button active"
+                type="button"
+            >
+
+                Random
+
+            </button>
+
+
+            <button
+                id="kangarooModeButton"
+                class="mode-button"
+                type="button"
+            >
+
+                🦘 Kangaroo
+
+            </button>
+
+
+        </div>
+
+
+        <p
+            id="modeDescription"
+            class="mode-description"
+        >
+            Cryptographically random 12-word code.
+
+        </p>
+
+
+        <!-- CODE -->
+
+        <section class="code-layout">
+
+
+            <!-- WORDS -->
+
+            <div class="words-panel">
+
+
+                <div
+                    id="wordGrid"
+                    class="word-grid"
+                    aria-live="polite"
+                    aria-label="Generated 12 word code"
+                >
+
+                    <div class="loading">
+                        Generating secure code…
+                    </div>
+
+                </div>
+
+
+                <div class="code-meta">
+
+
+                    <span id="codeNumber">
+                        Code #—
+                    </span>
+
+
+                    <span>
+                        •
+                    </span>
+
+
+                    <span>
+                        12 unique words
+                    </span>
+
+
+                </div>
+
+
+            </div>
+
+
+            <!-- QR -->
+
+            <div class="qr-panel">
+
+
+                <div
+                    class="qr-code"
+                >
+
+                    <img
+                        id="qrImage"
+                        alt="QR code for the current 12-word code"
+                    >
+
+                </div>
+
+
+                <p>
+                    Scan to read this code
+                </p>
+
+
+            </div>
+
+
+        </section>
+
+
+        <!-- GENERATE -->
+
+        <button
+            id="generateButton"
+            class="generate-button"
+            type="button"
+        >
+
+            Generate New Code
+
+        </button>
+
+
+        <!-- ERROR -->
+
+        <div
+            id="generationError"
+            class="error"
+            role="alert"
+            hidden
+        ></div>
+
+
+        <!-- STATUS -->
+
+        <div
+            id="kangarooStatus"
+            class="kangaroo-status"
+            hidden
+        ></div>
+
+
+        <!-- FOOTER -->
+
+        <footer>
+
+            <p>
+                Every generated combination is permanently registered.
+            </p>
+
+            <p>
+                The same 12-word sequence cannot be generated again.
+            </p>
+
+        </footer>
+
+
+    </section>
+
+
+</main>
+
+
+<script src="/app.js"></script>
+
+
+</body>
+
+</html>
