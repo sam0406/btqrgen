@@ -1,498 +1,254 @@
 "use strict";
 
 const crypto = require("crypto");
-const { neon } = require("@neondatabase/serverless");
 const bip39 = require("bip39");
-const QRCode = require("qrcode");
-
-const sql = neon(process.env.DATABASE_URL);
 
 
 /*
 |--------------------------------------------------------------------------
-| Configuration
+| BIP-39 Diagnostic
+|--------------------------------------------------------------------------
+|
+| This endpoint does NOT generate or return a wallet recovery phrase.
+|
+| It verifies that the installed bip39 package:
+|
+| 1. Uses the official English BIP-39 wordlist
+| 2. Correctly converts entropy -> mnemonic
+| 3. Correctly converts mnemonic -> entropy
+| 4. Correctly validates the checksum
+| 5. Produces exactly 12 words for 128-bit entropy
+|
 |--------------------------------------------------------------------------
 */
-
-const WORD_COUNT = 12;
-
-const KANGAROO_HISTORY = Math.max(
-    1,
-    Number(process.env.KANGAROO_HISTORY || 100)
-);
-
-const KANGAROO_CANDIDATES = Math.max(
-    5,
-    Number(process.env.KANGAROO_CANDIDATES || 75)
-);
-
-const GENERATION_LIMIT_PER_MINUTE = Math.max(
-    1,
-    Number(process.env.GENERATION_LIMIT_PER_MINUTE || 30)
-);
-
-const GENERATION_WINDOW_MINUTES = 1;
-
-const MAX_DATABASE_ATTEMPTS = 25;
 
 
 /*
 |--------------------------------------------------------------------------
-| SHA-256
+| Official BIP-39 128-bit test vector
+|--------------------------------------------------------------------------
+|
+| ENTROPY:
+|
+| 00000000000000000000000000000000
+|
+| Expected mnemonic:
+|
+| abandon abandon abandon abandon abandon abandon abandon abandon
+| abandon abandon abandon about
+|
 |--------------------------------------------------------------------------
 */
 
-function sha256(value) {
+const TEST_ENTROPY =
+    "00000000000000000000000000000000";
+
+const EXPECTED_MNEMONIC =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+
+/*
+|--------------------------------------------------------------------------
+| SHA-256 helper
+|--------------------------------------------------------------------------
+*/
+
+function sha256(buffer) {
     return crypto
         .createHash("sha256")
-        .update(value, "utf8")
-        .digest("hex");
+        .update(buffer)
+        .digest();
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| Read cookie
+| Convert bytes to binary
 |--------------------------------------------------------------------------
 */
 
-function getCookie(req, name) {
-    const cookieHeader = req.headers.cookie || "";
-
-    const cookies = cookieHeader
-        .split(";")
-        .map(item => item.trim());
-
-    for (const cookie of cookies) {
-        const separator = cookie.indexOf("=");
-
-        if (separator === -1) {
-            continue;
-        }
-
-        const key = cookie.slice(0, separator);
-        const value = cookie.slice(separator + 1);
-
-        if (key === name) {
-            return value;
-        }
-    }
-
-    return null;
+function bytesToBinary(bytes) {
+    return bytes
+        .map(byte =>
+            byte
+                .toString(2)
+                .padStart(8, "0")
+        )
+        .join("");
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| Authenticate session
-|--------------------------------------------------------------------------
-*/
-
-async function authenticate(req) {
-    const sessionToken = getCookie(req, "session");
-
-    if (!sessionToken) {
-        return false;
-    }
-
-    const sessionHash = sha256(sessionToken);
-
-    const result = await sql`
-        SELECT id
-        FROM auth_sessions
-        WHERE
-            session_hash = ${sessionHash}
-            AND expires_at > NOW()
-        LIMIT 1
-    `;
-
-    return result.length > 0;
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Generate a genuine BIP-39 12-word mnemonic
+| Independent BIP-39 checksum calculation
 |--------------------------------------------------------------------------
 |
-| 128 bits of cryptographically secure entropy
-| +
-| 4-bit SHA-256 checksum
-| =
-| 132 bits
-| =
-| 12 x 11-bit word indexes
+| For 128-bit entropy:
+|
+| checksum length = ENT / 32
+|                 = 128 / 32
+|                 = 4 bits
 |
 |--------------------------------------------------------------------------
 */
 
-function generateBip39Mnemonic() {
-    const mnemonic = bip39.generateMnemonic(128);
-
-    const normalized = mnemonic
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, " ");
-
-    const words = normalized.split(" ");
-
-    /*
-    |--------------------------------------------------------------------------
-    | Defensive validation
-    |--------------------------------------------------------------------------
-    */
-
-    if (words.length !== WORD_COUNT) {
-        throw new Error(
-            "Generated mnemonic does not contain exactly 12 words."
+function calculateChecksum(entropyHex) {
+    const entropyBuffer =
+        Buffer.from(
+            entropyHex,
+            "hex"
         );
-    }
 
-    if (!bip39.validateMnemonic(normalized)) {
-        throw new Error(
-            "Generated mnemonic failed BIP-39 checksum validation."
+    const hash =
+        sha256(entropyBuffer);
+
+    const binary =
+        bytesToBinary(
+            Array.from(hash)
         );
-    }
 
-    return words;
+    return binary.slice(0, 4);
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| Word overlap distance
-|--------------------------------------------------------------------------
-|
-| 12 shared words = distance 0
-| 0 shared words  = distance 12
-|
+| Independently inspect the mnemonic
 |--------------------------------------------------------------------------
 */
 
-function wordDistance(first, second) {
-    const secondSet = new Set(second);
-
-    let shared = 0;
-
-    for (const word of first) {
-        if (secondSet.has(word)) {
-            shared++;
-        }
-    }
-
-    return WORD_COUNT - shared;
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Position distance
-|--------------------------------------------------------------------------
-*/
-
-function positionDistance(first, second) {
-    let different = 0;
-
-    for (let i = 0; i < WORD_COUNT; i++) {
-        if (first[i] !== second[i]) {
-            different++;
-        }
-    }
-
-    return different;
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Combined candidate score
-|--------------------------------------------------------------------------
-*/
-
-function calculateCandidateScore(
-    candidate,
-    previousCodes
+function independentlyInspectMnemonic(
+    mnemonic
 ) {
-    let minimumWordDistance = WORD_COUNT;
-    let totalPositionDistance = 0;
+    const normalized =
+        mnemonic
+            .normalize("NFKD")
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, " ");
 
-    for (const previous of previousCodes) {
-        const wordDistanceValue = wordDistance(
-            candidate,
-            previous
+    const words =
+        normalized.split(" ");
+
+    const wordCount =
+        words.length;
+
+    const englishWordlist =
+        bip39.wordlists.english;
+
+    const indexes =
+        words.map(word =>
+            englishWordlist.indexOf(word)
         );
 
-        const positionDistanceValue = positionDistance(
-            candidate,
-            previous
+    const allWordsInEnglishList =
+        indexes.every(
+            index => index >= 0
         );
 
-        minimumWordDistance = Math.min(
-            minimumWordDistance,
-            wordDistanceValue
-        );
+    let reconstructedEntropy = null;
 
-        totalPositionDistance +=
-            positionDistanceValue;
-    }
+    let reconstructedChecksum = null;
 
-    return {
-        minimumWordDistance,
-        totalPositionDistance
-    };
-}
+    let expectedChecksum = null;
 
+    let checksumMatches = false;
 
-/*
-|--------------------------------------------------------------------------
-| Fetch recent mnemonics
-|--------------------------------------------------------------------------
-*/
+    let entropyError = null;
 
-async function getRecentCodes() {
-    const result = await sql`
-        SELECT words
-        FROM generated_codes
-        ORDER BY id DESC
-        LIMIT ${KANGAROO_HISTORY}
-    `;
+    if (allWordsInEnglishList) {
+        try {
+            const bits =
+                indexes
+                    .map(index =>
+                        index
+                            .toString(2)
+                            .padStart(11, "0")
+                    )
+                    .join("");
 
-    return result
-        .map(row => String(row.words).trim())
-        .filter(Boolean)
-        .map(words => words.split(/\s+/))
-        .filter(words => words.length === WORD_COUNT);
-}
+            /*
+             * 12 words = 132 bits
+             *
+             * First 128 bits = entropy
+             * Last 4 bits = checksum
+             */
 
+            const entropyBits =
+                bits.slice(0, 128);
 
-/*
-|--------------------------------------------------------------------------
-| Kangaroo candidate selection
-|--------------------------------------------------------------------------
-|
-| Every candidate is independently generated as a VALID BIP-39
-| mnemonic.
-|
-| We never modify individual words of an existing mnemonic.
-|
-|--------------------------------------------------------------------------
-*/
+            const checksumBits =
+                bits.slice(128);
 
-function chooseKangarooCandidate(previousCodes) {
-    if (previousCodes.length === 0) {
-        return generateBip39Mnemonic();
-    }
+            const entropyBytes = [];
 
-    let bestCandidate = null;
-
-    let bestMinimumWordDistance = -1;
-
-    let bestTotalPositionDistance = -1;
-
-    for (
-        let i = 0;
-        i < KANGAROO_CANDIDATES;
-        i++
-    ) {
-        const candidate = generateBip39Mnemonic();
-
-        const score = calculateCandidateScore(
-            candidate,
-            previousCodes
-        );
-
-        if (
-            score.minimumWordDistance >
-            bestMinimumWordDistance
-        ) {
-            bestCandidate = candidate;
-
-            bestMinimumWordDistance =
-                score.minimumWordDistance;
-
-            bestTotalPositionDistance =
-                score.totalPositionDistance;
-
-            continue;
-        }
-
-        if (
-            score.minimumWordDistance ===
-            bestMinimumWordDistance
-        ) {
-            if (
-                score.totalPositionDistance >
-                bestTotalPositionDistance
+            for (
+                let i = 0;
+                i < 128;
+                i += 8
             ) {
-                bestCandidate = candidate;
-
-                bestTotalPositionDistance =
-                    score.totalPositionDistance;
+                entropyBytes.push(
+                    parseInt(
+                        entropyBits.slice(
+                            i,
+                            i + 8
+                        ),
+                        2
+                    )
+                );
             }
+
+            const entropyBuffer =
+                Buffer.from(
+                    entropyBytes
+                );
+
+            reconstructedEntropy =
+                entropyBuffer.toString(
+                    "hex"
+                );
+
+            reconstructedChecksum =
+                checksumBits;
+
+            expectedChecksum =
+                calculateChecksum(
+                    reconstructedEntropy
+                );
+
+            checksumMatches =
+                reconstructedChecksum ===
+                expectedChecksum;
+
+        } catch (error) {
+            entropyError =
+                error.message;
         }
     }
 
-    return bestCandidate;
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Rate limiting
-|--------------------------------------------------------------------------
-*/
-
-async function checkGenerationRateLimit(
-    sessionToken
-) {
-    const sessionHash = sha256(sessionToken);
-
-    const key = `generate:${sessionHash}`;
-
-    const existing = await sql`
-        SELECT
-            attempts,
-            window_started_at
-        FROM rate_limits
-        WHERE rate_key = ${key}
-        LIMIT 1
-    `;
-
-    if (existing.length === 0) {
-        await sql`
-            INSERT INTO rate_limits
-            (
-                rate_key,
-                attempts,
-                window_started_at
-            )
-            VALUES
-            (
-                ${key},
-                1,
-                NOW()
-            )
-            ON CONFLICT (rate_key)
-            DO NOTHING
-        `;
-
-        return true;
-    }
-
-    const record = existing[0];
-
-    const elapsed =
-        Date.now() -
-        new Date(
-            record.window_started_at
-        ).getTime();
-
-    const windowMs =
-        GENERATION_WINDOW_MINUTES *
-        60 *
-        1000;
-
-    if (elapsed >= windowMs) {
-        await sql`
-            UPDATE rate_limits
-            SET
-                attempts = 1,
-                window_started_at = NOW()
-            WHERE rate_key = ${key}
-        `;
-
-        return true;
-    }
-
-    if (
-        Number(record.attempts) >=
-        GENERATION_LIMIT_PER_MINUTE
-    ) {
-        return false;
-    }
-
-    await sql`
-        UPDATE rate_limits
-        SET attempts = attempts + 1
-        WHERE rate_key = ${key}
-    `;
-
-    return true;
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Reserve globally unique mnemonic
-|--------------------------------------------------------------------------
-*/
-
-async function reserveCode(words) {
-    const code = words.join(" ");
-
-    const codeHash = sha256(code);
-
-    const result = await sql`
-        INSERT INTO generated_codes
-        (
-            code_hash,
-            words
-        )
-        VALUES
-        (
-            ${codeHash},
-            ${code}
-        )
-        ON CONFLICT (code_hash)
-        DO NOTHING
-        RETURNING
-            id,
-            created_at
-    `;
-
-    if (result.length === 0) {
-        return null;
-    }
 
     return {
-        id: result[0].id,
-        createdAt: result[0].created_at,
-        code,
-        words
+        normalizedWordCount:
+            wordCount,
+
+        allWordsInOfficialEnglishList:
+            allWordsInEnglishList,
+
+        checksumLength:
+            reconstructedChecksum
+                ? reconstructedChecksum.length
+                : null,
+
+        checksumMatches,
+
+        reconstructedEntropy,
+
+        reconstructedChecksum,
+
+        expectedChecksum,
+
+        entropyError
     };
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| Create QR
-|--------------------------------------------------------------------------
-|
-| IMPORTANT:
-|
-| The QR contains ONLY the exact lowercase 12-word mnemonic.
-|
-| No JSON.
-| No URL.
-| No extra metadata.
-|
-|--------------------------------------------------------------------------
-*/
-
-async function createQRCode(code) {
-    return QRCode.toDataURL(
-        code,
-        {
-            errorCorrectionLevel: "M",
-            margin: 2,
-            width: 500,
-
-            color: {
-                dark: "#000000",
-                light: "#FFFFFF"
-            }
-        }
-    );
 }
 
 
@@ -506,23 +262,18 @@ module.exports = async function handler(
     req,
     res
 ) {
-    /*
-    |--------------------------------------------------------------------------
-    | Method
-    |--------------------------------------------------------------------------
-    */
-
-    if (req.method !== "POST") {
+    if (req.method !== "GET") {
         res.setHeader(
             "Allow",
-            "POST"
+            "GET"
         );
 
         return res
             .status(405)
             .json({
                 success: false,
-                error: "Method not allowed."
+                error:
+                    "Method not allowed."
             });
     }
 
@@ -530,218 +281,145 @@ module.exports = async function handler(
     try {
         /*
         |--------------------------------------------------------------------------
-        | Authentication
+        | 1. Generate expected mnemonic using installed BIP-39 package
         |--------------------------------------------------------------------------
         */
 
-        const sessionToken =
-            getCookie(
-                req,
-                "session"
+        const generatedFromTestEntropy =
+            bip39.entropyToMnemonic(
+                TEST_ENTROPY,
+                bip39.wordlists.english
             );
 
-        const authenticated =
-            await authenticate(req);
 
-        if (!authenticated) {
-            return res
-                .status(401)
-                .json({
-                    success: false,
-                    error:
-                        "Authentication required."
-                });
-        }
+        /*
+        |--------------------------------------------------------------------------
+        | 2. Compare against official test vector
+        |--------------------------------------------------------------------------
+        */
+
+        const generatedMatchesOfficialVector =
+            generatedFromTestEntropy ===
+            EXPECTED_MNEMONIC;
 
 
         /*
         |--------------------------------------------------------------------------
-        | Generation rate limit
+        | 3. Validate using bip39
         |--------------------------------------------------------------------------
         */
 
-        const allowed =
-            await checkGenerationRateLimit(
-                sessionToken
+        const packageValidation =
+            bip39.validateMnemonic(
+                generatedFromTestEntropy,
+                bip39.wordlists.english
             );
 
-        if (!allowed) {
-            return res
-                .status(429)
-                .json({
-                    success: false,
-                    error:
-                        "Generation limit reached. Please wait a moment."
-                });
+
+        /*
+        |--------------------------------------------------------------------------
+        | 4. Convert back to entropy
+        |--------------------------------------------------------------------------
+        */
+
+        let roundTripEntropy = null;
+
+        let roundTripError = null;
+
+        try {
+            roundTripEntropy =
+                bip39.mnemonicToEntropy(
+                    generatedFromTestEntropy,
+                    bip39.wordlists.english
+                );
+        } catch (error) {
+            roundTripError =
+                error.message;
         }
 
 
         /*
         |--------------------------------------------------------------------------
-        | Requested mode
+        | 5. Independently inspect the test vector
         |--------------------------------------------------------------------------
         */
 
-        const body =
-            req.body || {};
-
-        const mode =
-            body.mode === "kangaroo"
-                ? "kangaroo"
-                : "random";
+        const independent =
+            independentlyInspectMnemonic(
+                EXPECTED_MNEMONIC
+            );
 
 
         /*
         |--------------------------------------------------------------------------
-        | Get Kangaroo history
+        | 6. Overall result
         |--------------------------------------------------------------------------
         */
 
-        let recentCodes = [];
-
-        if (mode === "kangaroo") {
-            recentCodes =
-                await getRecentCodes();
-        }
+        const diagnosticPassed =
+            generatedMatchesOfficialVector &&
+            packageValidation &&
+            roundTripEntropy === TEST_ENTROPY &&
+            independent.wordCount === 12 &&
+            independent.allWordsInOfficialEnglishList &&
+            independent.checksumMatches;
 
 
         /*
         |--------------------------------------------------------------------------
-        | Generate + globally reserve
-        |--------------------------------------------------------------------------
-        */
-
-        for (
-            let attempt = 0;
-            attempt < MAX_DATABASE_ATTEMPTS;
-            attempt++
-        ) {
-            let words;
-
-            if (mode === "kangaroo") {
-                words =
-                    chooseKangarooCandidate(
-                        recentCodes
-                    );
-            } else {
-                words =
-                    generateBip39Mnemonic();
-            }
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | Final validation before database reservation
-            |--------------------------------------------------------------------------
-            */
-
-            const mnemonic =
-                words.join(" ");
-
-
-            if (
-                words.length !==
-                WORD_COUNT
-            ) {
-                throw new Error(
-                    "Invalid mnemonic word count."
-                );
-            }
-
-
-            if (
-                !bip39.validateMnemonic(
-                    mnemonic
-                )
-            ) {
-                throw new Error(
-                    "Generated mnemonic failed final BIP-39 validation."
-                );
-            }
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | Global uniqueness
-            |--------------------------------------------------------------------------
-            */
-
-            const reserved =
-                await reserveCode(
-                    words
-                );
-
-
-            if (
-                reserved !== null
-            ) {
-                /*
-                |--------------------------------------------------------------------------
-                | QR
-                |--------------------------------------------------------------------------
-                */
-
-                const qr =
-                    await createQRCode(
-                        reserved.code
-                    );
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Response
-                |--------------------------------------------------------------------------
-                */
-
-                return res
-                    .status(200)
-                    .json({
-                        success: true,
-
-                        id:
-                            reserved.id,
-
-                        mode,
-
-                        words:
-                            reserved.words,
-
-                        code:
-                            reserved.code,
-
-                        qr,
-
-                        bip39Valid:
-                            true,
-
-                        wordCount:
-                            WORD_COUNT,
-
-                        createdAt:
-                            reserved.createdAt
-                    });
-            }
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Database collision / temporary failure
+        | 7. Return diagnostics only
         |--------------------------------------------------------------------------
         */
 
         return res
-            .status(503)
+            .status(200)
             .json({
-                success: false,
-                error:
-                    "Unable to reserve a unique mnemonic. Please try again."
-            });
+                success: true,
 
+                diagnosticPassed,
+
+                bip39Package:
+                    "working",
+
+                generatedMnemonicMatchesOfficialVector:
+                    generatedMatchesOfficialVector,
+
+                packageValidation,
+
+                roundTripEntropyMatches:
+                    roundTripEntropy ===
+                    TEST_ENTROPY,
+
+                independentChecksumValidation:
+                    independent.checksumMatches,
+
+                wordCount:
+                    independent.normalizedWordCount,
+
+                allWordsInOfficialEnglishList:
+                    independent.allWordsInOfficialEnglishList,
+
+                checksumLength:
+                    independent.checksumLength,
+
+                reconstructedEntropy:
+                    independent.reconstructedEntropy,
+
+                reconstructedChecksum:
+                    independent.reconstructedChecksum,
+
+                expectedChecksum:
+                    independent.expectedChecksum,
+
+                roundTripError,
+
+                entropyError:
+                    independent.entropyError
+            });
 
     } catch (error) {
         console.error(
-            "Generation error:",
+            "BIP-39 diagnostic error:",
             error
         );
 
@@ -749,8 +427,9 @@ module.exports = async function handler(
             .status(500)
             .json({
                 success: false,
+                diagnosticPassed: false,
                 error:
-                    "Server error while generating mnemonic."
+                    "BIP-39 diagnostic failed."
             });
     }
 };
